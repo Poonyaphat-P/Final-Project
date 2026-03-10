@@ -6,7 +6,7 @@ load_dotenv()  # This loads the variables from the .env file
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENROUTER_API_KEY") #Make the program use the openrouter API instead of OpenAI
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk
 from tavily import TavilyClient # Make your chatbot can search information on the internet
 from langchain.tools import tool
 from typing import Dict, Any # For the tavily part
@@ -24,13 +24,14 @@ def web_search(query: str) -> Dict[str, Any]:
 
     return tavily_client.search(query, max_results=3)
 
-def get_airquality(lat: float, lon: float) -> Dict[str, Any]:
-    """Get the air quality of a city"""
-    url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={os.getenv('OPENWEATHERMAP_API_KEY')}"
+@tool
+def get_airquality(city: str) -> Dict[str, Any]:
+    """Get the air quality (AQI) of a specific city. Extract the city name from the user's prompt."""
+    url = f"https://api.waqi.info/feed/{city}/?token={os.getenv('AQICN_API_KEY')}"
     response = requests.get(url)
     return response.json()
 
-tools = [web_search]
+tools = [web_search, get_airquality]
 
 llm = ChatOpenAI(
     model="gpt-4o-mini",
@@ -59,15 +60,17 @@ while True:
     if len(chat_history) > MAX_HISTORY:
         chat_history = [chat_history[0]] + chat_history[-MAX_HISTORY:]
 
-    #Agent need dict input
-    response = scifi_agent.invoke({
-        "messages": chat_history
-    })
+    # Stream the response token by token
+    print("Bot: ", end="", flush=True)
+    full_response = ""
+    for token, metadata in scifi_agent.stream(
+        {"messages": chat_history},
+        stream_mode="messages"
+    ):
+        if isinstance(token, AIMessageChunk) and token.content:  # Use isinstance to prevent bot from printing json output from using tools
+            print(token.content, end="", flush=True)
+            full_response += token.content
+    print()  # Move to a new line when done
 
-    #Extract assistant message
-    ai_message = response["messages"][-1]
-
-    #Save to memory
-    chat_history.append(ai_message)
-
-    print("Bot: ", ai_message.content)
+    # Save the full response to memory
+    chat_history.append(AIMessage(content=full_response))
